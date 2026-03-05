@@ -1,0 +1,205 @@
+# QQ Agent Bot
+
+一个模块化的 QQ 群 AI 助手框架，基于 **NapCat (OneBot v11)** + **OpenClaw Agent** 架构。
+
+支持意图分类双层路由、多 Worker 并发调度、上下文记忆、人格定制、群消息反馈挖掘等完整功能，开箱即用。
+
+## 架构概览
+
+```
+QQ 消息 → NapCat (OneBot WS) → Bot Relay
+  → Intent Classification (LLM)
+    → 低优先级: Quick Reply (轻量 LLM 直接回复)
+    → 高优先级: OpenClaw Agent (Gateway WS RPC)
+      → Agent 处理 → 写入回复文件 → Bot 轮询/回调 → 发回 QQ
+```
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **双层路由** | Intent 分类器（0-5级）智能分流，简单消息走 Quick Reply，复杂问题走 Agent |
+| **多 Worker 池** | 4 个 Agent Worker 并发调度，按意图等级分配不同 tier |
+| **Gateway RPC** | WebSocket 连接 OpenClaw Gateway，完整握手 + 心跳协议 |
+| **双通道回复** | HTTP 回调 + 文件轮询双通道接收 Agent 回复，互为容灾 |
+| **上下文注入** | Per-chat markdown 滚动历史，Agent 自动获取对话上下文 |
+| **人格系统** | SOUL.md 定义性格底色，MEMORY.md 记录成长记忆 |
+| **静默日志** | 群消息全量 JSONL 记录，用于反馈挖掘和行为分析 |
+| **反馈监控** | LLM 自动分类群消息（bug/建议/疑问/吐槽），定时汇总推送给 owner |
+| **学习系统** | 日度交互总结，自动更新 MEMORY.md |
+| **安全过滤** | Prompt 注入检测 + 频率限制 + Owner-only 管理命令 |
+| **Admin 命令** | `/model` `/route` `/stop` `/status` 等运行时管控 |
+
+## 目录结构
+
+```
+qq-agent-bot/
+├── .env.example              # 环境变量模板
+├── .gitignore
+├── package.json
+├── Dockerfile
+├── docker-compose.yml
+├── LICENSE
+├── config/
+│   └── bot.config.mjs        # 集中配置（从 .env 读取）
+├── src/
+│   ├── qq_bot.mjs            # 主程序
+│   └── send_message.mjs      # 消息发送工具（供 Python 脚本调用）
+├── scripts/
+│   ├── feedback_monitor.py   # 群消息反馈监控 + 定时汇总
+│   ├── learning_summarizer.py# 日度学习总结 + MEMORY.md 更新
+│   └── setup_cron.sh         # 一键安装定时任务
+└── persona/
+    ├── SOUL.md.example       # Bot 人格模板
+    └── MEMORY.md.example     # Bot 记忆模板
+```
+
+## 前置依赖
+
+| 组件 | 说明 | 链接 |
+|------|------|------|
+| **Node.js** | >= 18，推荐 22 LTS | [nodejs.org](https://nodejs.org) |
+| **Python 3** | 用于反馈监控和学习总结脚本 | - |
+| **NapCat** | QQ 协议端，提供 OneBot v11 WebSocket | [NapCat](https://github.com/NapNeko/NapCatQQ) |
+| **OpenClaw** | AI Agent 运行时（Gateway + Agent） | [OpenClaw](https://openclaw.com) |
+| **LLM API** | 任何兼容 OpenAI Chat Completions 的 API（用于意图分类和快速回复） | - |
+
+## 快速开始
+
+### 1. 克隆仓库
+
+```bash
+git clone https://github.com/HkingAuditore/qq-agent-bot.git
+cd qq-agent-bot
+```
+
+### 2. 配置环境变量
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入你的配置
+```
+
+关键配置项：
+
+```bash
+BOT_QQ=你的机器人QQ号
+OWNER_QQ=你的QQ号（管理员）
+OWNER_NAME=你的昵称
+NAPCAT_WS_URL=ws://127.0.0.1:3001
+GATEWAY_TOKEN=你的OpenClaw Token
+INTENT_API_KEY=你的LLM API Key
+QUICK_API_KEY=你的LLM API Key
+```
+
+### 3. 定制人格
+
+```bash
+cp persona/SOUL.md.example persona/SOUL.md
+cp persona/MEMORY.md.example persona/MEMORY.md
+# 编辑这两个文件，赋予你的 Bot 独特个性
+```
+
+### 4. 安装依赖并启动
+
+```bash
+npm install
+npm start
+```
+
+### 5. （可选）安装定时任务
+
+```bash
+chmod +x scripts/setup_cron.sh
+./scripts/setup_cron.sh
+```
+
+这会安装：
+- 每 2 小时扫描群消息并分类反馈
+- 每天 12:00 和 21:00 发送反馈汇总
+- 每天 23:30 生成学习总结并更新 MEMORY.md
+
+## Docker 部署
+
+```bash
+cp .env.example .env
+# 编辑 .env
+
+docker compose up -d
+```
+
+> **注意**：Bot 使用 `network_mode: host`，需要 NapCat 和 OpenClaw 在同一台机器上运行。如果不是，修改 `docker-compose.yml` 中的网络配置。
+
+## Admin 命令
+
+在 QQ 中发送以下命令（仅 Owner 可用）：
+
+| 命令 | 说明 |
+|------|------|
+| `/model` | 查看/切换 Agent 使用的模型 |
+| `/model [编号]` | 切换到指定模型 |
+| `/route` | 查看/切换意图分类模型 |
+| `/stop` | 终止所有进行中的 Agent 任务 |
+| `/status` | 查看 Bot 运行状态 |
+| `/quick` | 查看/切换快速回复模型 |
+
+## 意图分级说明
+
+| 等级 | 含义 | 路由 |
+|------|------|------|
+| 0 | 闲聊/简单问答 | Quick Reply（轻量 LLM） |
+| 1 | 轻度任务 | Agent Lite |
+| 2 | 标准任务 | Agent Standard |
+| 3 | 复杂任务 | Agent Strong |
+| 4-5 | 重度任务（编程/分析） | Agent Heavy |
+
+## 自定义扩展
+
+### 添加新模型
+
+编辑 `config/bot.config.mjs` 中的 `MODEL_PRESETS`：
+
+```javascript
+export const MODEL_PRESETS = {
+  '1': { p: 'openai', id: 'gpt-4o', n: 'GPT-4o' },
+  '2': { p: 'bailian', id: 'qwen-plus', n: 'Qwen-Plus' },
+  '3': { p: 'volcengine', id: 'doubao-seed', n: 'Doubao-Seed' },
+};
+```
+
+### 修改安全过滤规则
+
+编辑 `config/bot.config.mjs` 中的 `INJECTION_PATTERNS` 数组。
+
+### 调整 Worker 池
+
+编辑 `config/bot.config.mjs` 中的 `AGENT_PROFILES` 和 `WORKER_COUNT`。
+
+## 数据目录
+
+运行时产生的数据存放在 `DATA_DIR`（默认 `/data`）下：
+
+```
+$DATA_DIR/
+├── chat_contexts/      # 对话上下文（per-chat markdown）
+├── group_msg_logs/     # 群消息日志（JSONL）
+├── feedback_records/   # 反馈分类结果
+├── interaction_logs/   # 交互日志
+├── delivery-queue/     # Agent 回复文件队列
+└── workspace/          # Agent 工作空间
+    ├── MEMORY.md       # Bot 记忆（运行时）
+    └── SOUL.md         # Bot 人格（运行时）
+```
+
+## 技术栈
+
+- **Node.js** — 主程序，WebSocket 连接管理
+- **Python 3** — 反馈监控、学习总结等离线脚本
+- **WebSocket** — NapCat 消息收发 + OpenClaw Gateway RPC
+- **HTTP** — 回调服务器接收 Agent 回复
+- **JSONL** — 日志和反馈记录格式
+- **Markdown** — 上下文、人格、记忆存储格式
+
+## License
+
+[MIT](LICENSE)

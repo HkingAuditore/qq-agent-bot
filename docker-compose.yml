@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  qq-agent-bot:
+    build: .
+    container_name: qq-agent-bot
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "19283:19283"    # HTTP callback port
+    volumes:
+      - bot-data:/data   # Persistent data (logs, contexts, feedback)
+      - ./persona:/app/persona  # Mount persona files for easy editing
+    network_mode: host    # Required to communicate with NapCat and OpenClaw on localhost
+    # If not using host network, configure these instead:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+
+volumes:
+  bot-data:
+    driver: local

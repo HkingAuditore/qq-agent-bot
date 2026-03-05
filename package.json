@@ -1,0 +1,17 @@
+{
+  "name": "qq-agent-bot",
+  "version": "1.0.0",
+  "description": "A modular QQ group AI assistant framework based on NapCat + OpenClaw Agent architecture",
+  "type": "module",
+  "main": "src/qq_bot.mjs",
+  "scripts": {
+    "start": "node src/qq_bot.mjs",
+    "send": "node src/send_message.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.19.0",
+    "dotenv": "^16.4.0"
+  },
+  "keywords": ["qq-bot", "ai-agent", "openclaw", "napcat", "onebot"],
+  "license": "MIT"
+}

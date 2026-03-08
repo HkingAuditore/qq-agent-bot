@@ -229,13 +229,20 @@ function checkSafety(text) {
   return { safe: true };
 }
 
+// NO_REPLY filter — suppress silent-reply markers from Agent
+const NO_REPLY_PATTERN = /^\s*NO[_\-\s]?REPLY\s*$/i;
+
+function isNoReply(text) {
+  return NO_REPLY_PATTERN.test(text);
+}
+
 
 // ============================================================
 // Silent Group Message Logger
 // ============================================================
 
 async function ensureDir(dir) {
-  try { await mkdir(dir, { recursive: true }); } catch {}
+  try { await mkdir(dir, { recursive: true }); } catch { }
 }
 
 async function writeGroupLog(groupId, userId, nickname, text, atList) {
@@ -307,7 +314,7 @@ async function appendContext(chatId, role, nickname, text, workerLabel) {
   const entry = `### ${ts}\n${roleTag}: ${truncated}\n`;
 
   let existing = '';
-  try { existing = await readFile(filePath, 'utf8'); } catch {}
+  try { existing = await readFile(filePath, 'utf8'); } catch { }
   if (!existing) {
     existing = `<!-- chatId: ${chatId} -->\n`;
   }
@@ -360,9 +367,9 @@ async function cleanupAllContexts() {
             log('DEBUG', `[Context] Expired: ${file}`);
           }
         }
-      } catch {}
+      } catch { }
     }
-  } catch {}
+  } catch { }
 }
 
 
@@ -495,9 +502,9 @@ function startReplyFilePoller(requestId) {
         const content = await readFile(replyFile, 'utf8');
         if (content.trim()) {
           resolvePendingRequest(requestId, content.trim());
-          try { await writeFile(replyFile, ''); } catch {}
+          try { await writeFile(replyFile, ''); } catch { }
         }
-      } catch {}
+      } catch { }
     }
   }, 1500);
   replyFilePollers.set(requestId, interval);
@@ -544,13 +551,17 @@ function startCallbackServer() {
             // Record bot reply to context
             if (pendingInfo?.targetType && pendingInfo?.targetId) {
               const cbChatId = getChatId(pendingInfo.targetType, String(pendingInfo.targetId));
-              appendContext(cbChatId, 'bot', '', String(message), 'Agent').catch(() => {});
+              appendContext(cbChatId, 'bot', '', String(message), 'Agent').catch(() => { });
             }
           } else if (targetType && targetId) {
             // Fallback: direct send if requestId not found
-            sendMsg(targetType, String(targetId), String(message));
+            if (!isNoReply(String(message))) {
+              sendMsg(targetType, String(targetId), String(message));
+              log('INFO', `[Callback] Fallback direct send → ${targetType}:${targetId}`);
+            } else {
+              log('INFO', `[Callback] NO_REPLY suppressed for ${targetType}:${targetId}`);
+            }
             resolved = true;
-            log('INFO', `[Callback] Fallback direct send → ${targetType}:${targetId}`);
           } else {
             log('WARN', `[Callback] Unknown requestId=${requestId}`);
           }
@@ -923,9 +934,9 @@ async function handleEvent(raw) {
   if (event.user_id === BOT_QQ) return;
   if (event.echo) return;
 
-  const msgType  = event.message_type;
-  const userId   = event.user_id;
-  const groupId  = event.group_id;
+  const msgType = event.message_type;
+  const userId = event.user_id;
+  const groupId = event.group_id;
 
   // Anti-spoofing: sanitize nickname to remove fake (QQ:xxx) patterns
   const rawNickname = event.sender?.nickname || String(userId);
@@ -950,7 +961,7 @@ async function handleEvent(raw) {
 
   // Silent log ALL group messages (before filtering)
   if (msgType === 'group' && text) {
-    writeGroupLog(groupId, userId, nickname, text, atList).catch(() => {});
+    writeGroupLog(groupId, userId, nickname, text, atList).catch(() => { });
   }
 
   // Group messages: must @bot to trigger AI response
@@ -964,18 +975,18 @@ async function handleEvent(raw) {
   log('INFO', `↙ [${msgType}] ${nickname}(${userId})${isOwner ? '[OWNER]' : ''}${groupId ? ' 群' + groupId : ''}: ${text}`);
 
   const targetType = msgType === 'group' ? 'group' : 'private';
-  const targetId   = msgType === 'group' ? groupId : userId;
+  const targetId = msgType === 'group' ? groupId : userId;
 
   // ── Record user message to context (with identity tag) ──
   const chatId = getChatId(targetType, targetId);
-  appendContext(chatId, 'user', isOwner ? '【主人】' + nickname : nickname + '(QQ:' + userId + ')', text).catch(() => {});
+  appendContext(chatId, 'user', isOwner ? '【主人】' + nickname : nickname + '(QQ:' + userId + ')', text).catch(() => { });
 
   // ── Intent pre-check: filter out pure emoji/punctuation in group chats ──
   if (msgType === 'group') {
     const stripped = text.replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
-                         .replace(/[\u2600-\u27FF]/g, '')
-                         .replace(/[!！。，、？…~～]/g, '')
-                         .trim();
+      .replace(/[\u2600-\u27FF]/g, '')
+      .replace(/[!！。，、？…~～]/g, '')
+      .trim();
     if (!stripped) {
       log('INFO', `[Intent] "${text.slice(0, 20)}" → SKIP (pure emoji/punctuation)`);
       return;
@@ -991,7 +1002,7 @@ async function handleEvent(raw) {
     try {
       for (const profile of AGENT_PROFILES) {
         const sk = getSessionKeyForChat(profile.agentId, targetType, targetId);
-        try { await gatewaySend('sessions.reset', { key: sk }); } catch {}
+        try { await gatewaySend('sessions.reset', { key: sk }); } catch { }
       }
       sendMsg(targetType, targetId, '✅ 已开启新对话，所有 Agent 的聊天记录已清空。');
     } catch (e) {
@@ -1168,13 +1179,17 @@ async function handleEvent(raw) {
     try {
       const reply = await quickReply(text, userId, nickname);
       sendMsg(targetType, targetId, reply);
-      recordInteraction(text, reply, targetType, targetId, nickname, 'Quick', 0).catch(() => {});
+      recordInteraction(text, reply, targetType, targetId, nickname, 'Quick', 0).catch(() => { });
     } catch (err) {
       log('WARN', `[QuickReply] failed: ${err.message}, fallback Agent`);
       sendMsg(targetType, targetId, '正在思考中，请稍候...');
       try {
         const r = await askAgent(targetType, targetId, nickname, text, userId);
-        sendMsg(targetType, targetId, r);
+        if (!isNoReply(r)) {
+          sendMsg(targetType, targetId, r);
+        } else {
+          log('INFO', `[NoReply] Agent fallback returned NO_REPLY, suppressing`);
+        }
       } catch (e2) { sendMsg(targetType, targetId, '抱歉，AI暂时无法响应。'); }
     }
     userLocks.delete(lockKey); decrementGroupPending(groupKey); return;
@@ -1204,9 +1219,13 @@ async function handleEvent(raw) {
 
   try {
     const reply = await askAgent(targetType, targetId, nickname, text, userId, worker);
-    sendMsg(targetType, targetId, reply);
-    const _dur = worker.currentTask ? Date.now() - worker.currentTask.startTime : 0;
-    recordInteraction(text, reply, targetType, targetId, nickname, agentProfile.label, _dur).catch(() => {});
+    if (!isNoReply(reply)) {
+      sendMsg(targetType, targetId, reply);
+      const _dur = worker.currentTask ? Date.now() - worker.currentTask.startTime : 0;
+      recordInteraction(text, reply, targetType, targetId, nickname, agentProfile.label, _dur).catch(() => { });
+    } else {
+      log('INFO', `[NoReply] Agent returned NO_REPLY, suppressing output for ${nickname}(${userId})`);
+    }
   } catch (err) {
     log('ERROR', `Handler error [${worker.id}]:`, err.message);
     if (err.message.includes('Interrupted by new message')) {

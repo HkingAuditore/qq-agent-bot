@@ -33,7 +33,7 @@ QQ 消息 → NapCat (OneBot WS) → Bot Relay
 | **自动中断** | 用户发送新消息时自动打断前一个仍在运行的 Agent 任务 |
 | **Agent 事件上限** | 限制单次 Agent 调用的工具事件数，防止无限循环 |
 | **Emoji 预过滤** | 群消息中纯 emoji/标点自动跳过，减少无意义调用 |
-| **Admin 命令** | `/model` `/route` `/stop` `/forcestop` `/status` `/imodel` `/quick` 等运行时管控 |
+| **Admin 命令** | `/new` `/model` `/route` `/workers` `/stop` `/imodel` `/benchmark` 等运行时管控 |
 
 ## 目录结构
 
@@ -90,20 +90,31 @@ cp .env.example .env
 ```bash
 BOT_QQ=你的机器人QQ号
 OWNER_QQ=你的QQ号（管理员）
+OWNER_QQS=你的QQ号,其他管理员QQ号
 OWNER_NAME=你的昵称
 NAPCAT_WS_URL=ws://127.0.0.1:3001
+GATEWAY_HOST=127.0.0.1
+GATEWAY_PORT=18789
 GATEWAY_TOKEN=你的OpenClaw Token
+CALLBACK_HOST=127.0.0.1
+CALLBACK_PORT=19283
+DATA_DIR=/data
+RUNTIME_USER=openclaw
 INTENT_API_KEY=你的LLM API Key
 QUICK_API_KEY=你的LLM API Key
 ```
+
+> 当前版本的主程序已经通过 `config/bot.config.mjs` 读取 `.env`。部署时请把 `.env` 视为主配置源，`src/qq_bot.mjs` 是最终可执行入口。
 
 ### 3. 定制人格
 
 ```bash
 cp persona/SOUL.md.example persona/SOUL.md
 cp persona/MEMORY.md.example persona/MEMORY.md
-# 编辑这两个文件，赋予你的 Bot 独特个性
+# 编辑模板，供初始化/参考使用
 ```
+
+> 注意：运行时读写的长期记忆文件通常位于 `WORKSPACE_DIR/MEMORY.md`；`persona/*.example` 是模板，不是唯一运行时真相。
 
 ### 4. 安装依赖并启动
 
@@ -133,26 +144,28 @@ cp .env.example .env
 docker compose up -d
 ```
 
-> **注意**：Bot 使用 `network_mode: host`，需要 NapCat 和 OpenClaw 在同一台机器上运行。如果不是，修改 `docker-compose.yml` 中的网络配置。
+> **注意**：Bot 使用 `network_mode: host`，需要 NapCat 和 OpenClaw 在同一台机器上运行。如果不是，修改 `docker-compose.yml` 中的网络配置。回调 HTTP 服务默认只监听 `127.0.0.1:${CALLBACK_PORT:-19283}`，供本机 Agent / helper / 离线脚本调用，不对外暴露。
 
 ## Admin 命令
 
-在 QQ 中发送以下命令（仅 Owner 可用）：
+在 QQ 中发送以下命令。标注“管理员”的命令需要 Owner 权限；未标注的命令按当前代码逻辑可供普通会话使用：
 
 | 命令 | 说明 |
 |------|------|
+| `/new` `/reset` `/newsession` | 重置当前 chat 的 Agent 会话（管理员） |
 | `/model` | 查看/切换 Agent 使用的模型 |
-| `/model [编号]` | 切换到指定模型 |
-| `/route` | 查看/切换意图分类模型 |
-| `/route quick [N]` | 设置 Quick Reply 阈值（≤N 走快速回复） |
+| `/model list` | 列出所有可用 Agent 模型 |
+| `/model [编号]` | 切换到指定模型（管理员） |
+| `/route` | 查看当前路由模式与 Worker 状态 |
+| `/route auto|agent|quick` | 切换自动路由 / 全 Agent / 全 Quick 模式（管理员） |
+| `/route quick [编号]` | 切换 Quick Reply 使用的模型预设（管理员） |
 | `/imodel` | 查看/切换意图分类模型 |
 | `/imodel list` | 列出所有可用的意图分类模型 |
-| `/stop` | 终止所有进行中的 Agent 任务 |
-| `/forcestop` | 强制终止所有任务（包括清除队列） |
-| `/status` | 查看 Bot 运行状态 |
-| `/quick` | 查看/切换快速回复模型 |
-| `/benchmark` | 运行性能基准测试 |
-| `/reset` | 重置 Bot 状态 |
+| `/workers` | 查看 Worker 池状态 |
+| `/stop` | 中断当前用户正在执行的任务 |
+| `/stop [worker-id]` | 管理员强制中断指定 Worker |
+| `/imodel [编号]` | 切换意图分类模型（管理员） |
+| `/benchmark` | 运行性能基准测试（管理员） |
 
 ## 安全机制
 
@@ -174,17 +187,18 @@ Bot 会自动清洗消息中的昵称（移除伪装的 QQ 号），并通过 `i
 
 ### Agent 事件上限
 
-每个 Agent 调用有 `maxAgentEvents` 上限（默认 50），防止 Agent 陷入无限工具调用循环。
+每个 Agent 调用有 `maxAgentEvents` 上限，防止 Agent 陷入无限工具调用循环。具体上限以 `config/bot.config.mjs` 中的 Agent profile 配置为准。
 
 ## 意图分级说明
 
 | 等级 | 含义 | 路由 |
 |------|------|------|
+| REJECT | 广告/垃圾/恶意骚扰 | 丢弃 |
 | 0 | 闲聊/简单问答 | Quick Reply（轻量 LLM） |
 | 1 | 轻度任务 | Agent Lite |
 | 2 | 标准任务 | Agent Standard |
 | 3 | 复杂任务 | Agent Strong |
-| 4-5 | 重度任务（编程/分析） | Agent Heavy |
+| 4 | 重度任务（编程/分析） | Agent Heavy |
 
 ## 自定义扩展
 
@@ -208,11 +222,13 @@ export const MODEL_PRESETS = {
 
 编辑 `config/bot.config.mjs` 中的 `AGENT_PROFILES` 和 `WORKER_COUNT`。
 
-每个 Agent Profile 支持配置：
+每个 Agent Profile 当前支持配置：
+- `label` — 展示名称
+- `tier` — 该 Agent 对应的意图等级
 - `agentId` — Agent 标识（不同 tier 可用不同 agent）
-- `model` — 使用的 LLM 模型
-- `minIntent` — 最低意图等级
 - `maxAgentEvents` — 单次调用最大事件数上限
+
+> 说明：`WORKER_COUNT` 目前主要作为配置参考保留，当前 `src/qq_bot.mjs` 里的 Worker 数组仍是固定 4 个执行槽位。
 
 ## 数据目录
 
@@ -224,11 +240,19 @@ $DATA_DIR/
 ├── group_msg_logs/     # 群消息日志（JSONL）
 ├── feedback_records/   # 反馈分类结果
 ├── interaction_logs/   # 交互日志
-├── delivery-queue/     # Agent 回复文件队列
-└── workspace/          # Agent 工作空间
-    ├── MEMORY.md       # Bot 记忆（运行时）
-    └── SOUL.md         # Bot 人格（运行时）
+├── workspace/          # 主 Agent 工作空间
+│   ├── MEMORY.md       # Bot 记忆（运行时）
+│   ├── SOUL.md         # Bot 人格（运行时）
+│   └── qq_replies/     # 主 reply 文件目录
+├── workspace-lite/
+│   └── qq_replies/
+├── workspace-strong/
+│   └── qq_replies/
+└── workspace-heavy/
+    └── qq_replies/
 ```
+
+排查 Agent 回复文件时，请优先检查各个 `workspace*/qq_replies/` 目录，而不是旧文档中的 `delivery-queue/`。
 
 ## 技术栈
 

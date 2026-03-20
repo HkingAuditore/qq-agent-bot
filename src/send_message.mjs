@@ -18,6 +18,7 @@ import { dirname, resolve } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenvConfig({ path: resolve(__dirname, '../.env') });
 
+const CALLBACK_HOST = process.env.CALLBACK_HOST || '127.0.0.1';
 const CALLBACK_PORT = parseInt(process.env.CALLBACK_PORT || '19283');
 const [targetType, targetId, message] = process.argv.slice(2);
 
@@ -32,7 +33,7 @@ if (!targetType || !targetId || !message) {
 const data = JSON.stringify({ targetType, targetId: Number(targetId), message });
 
 const req = http.request({
-  hostname: '127.0.0.1',
+  hostname: CALLBACK_HOST,
   port: CALLBACK_PORT,
   path: '/send',
   method: 'POST',
@@ -41,8 +42,15 @@ const req = http.request({
   let body = '';
   res.on('data', chunk => body += chunk);
   res.on('end', () => {
-    if (res.statusCode === 200) console.log('✅ Message sent successfully');
-    else { console.error(`❌ Failed (${res.statusCode}): ${body}`); process.exit(1); }
+    let payload = null;
+    try { payload = body ? JSON.parse(body) : null; } catch { payload = null; }
+    if (res.statusCode === 200 && payload?.ok) {
+      console.log('✅ Message sent successfully');
+      return;
+    }
+    const errorMsg = payload?.error || body || 'Unknown error';
+    console.error(`❌ Failed (${res.statusCode}): ${errorMsg}`);
+    process.exit(1);
   });
 });
 

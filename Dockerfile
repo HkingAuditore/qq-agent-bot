@@ -26,13 +26,12 @@ COPY persona/ ./persona/
 
 # Create data directories
 RUN mkdir -p /data/chat_contexts /data/group_msg_logs /data/feedback_records \
-    /data/interaction_logs /data/delivery-queue /data/workspace
+    /data/interaction_logs /data/workspace/qq_replies /data/workspace-lite/qq_replies \
+    /data/workspace-strong/qq_replies /data/workspace-heavy/qq_replies
 
 # Default environment
 ENV DATA_DIR=/data
 ENV WORKSPACE_DIR=/data/workspace
 ENV NODE_ENV=production
-
-EXPOSE 19283
 
 CMD ["node", "src/qq_bot.mjs"]

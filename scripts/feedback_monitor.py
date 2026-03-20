@@ -38,7 +38,7 @@ try:
 except:
     pass
 
-NODE_BIN = os.environ.get('NODE_BIN', '/usr/bin/node')
+NODE_BIN = os.environ.get('NODE_BIN', 'node')
 
 LLM_URL = os.environ.get('LLM_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
 LLM_KEY = os.environ.get('LLM_KEY', '')
@@ -289,8 +289,11 @@ def send_qq_msg(target_type, target_id, message):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         send_script = os.path.join(script_dir, '..', 'src', 'send_message.mjs')
         if os.path.exists(send_script):
-            subprocess.run([NODE_BIN, send_script, target_type, str(target_id), message],
-                         timeout=10, capture_output=True)
+            completed = subprocess.run([NODE_BIN, send_script, target_type, str(target_id), message],
+                         timeout=10, capture_output=True, text=True)
+            if completed.returncode != 0:
+                stderr = (completed.stderr or completed.stdout or '').strip()
+                raise RuntimeError(stderr or f'send_message exited with code {completed.returncode}')
         else:
             # Fallback: direct HTTP call
             body = json.dumps({
@@ -301,7 +304,10 @@ def send_qq_msg(target_type, target_id, message):
             req = Request('http://127.0.0.1:19283/send', data=body, headers={
                 'Content-Type': 'application/json',
             })
-            urlopen(req, timeout=10)
+            resp = urlopen(req, timeout=10)
+            payload = json.loads(resp.read().decode('utf-8') or '{}')
+            if getattr(resp, 'status', 200) != 200 or not payload.get('ok'):
+                raise RuntimeError(payload.get('error') or f'HTTP {getattr(resp, "status", "?")}')
         print(f'[INFO] Sent to {target_type}:{target_id}')
     except Exception as e:
         print(f'[WARN] Send failed: {e}')
